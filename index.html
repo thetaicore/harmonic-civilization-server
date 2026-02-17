@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Primordial Harmonic Substrate ∞</title>
+<style>
+html,body{
+    margin:0;
+    padding:0;
+    overflow:hidden;
+    background:#ffffff;
+}
+canvas{display:block;}
+#logo{
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 400px;       /* enlarged size */
+    height: auto;
+    opacity: 0.86;      /* fade to 15% */
+    pointer-events: none;
+    z-index: 1;         /* behind nodes, lower than canvas lines if needed */
+}
+</style>
+
+</head>
+<body>
+
+<canvas id="void"></canvas>
+<img id="logo" src="https://arweave.net/4k5NA5VfSrvTd1qtd6HY1WVjaR2gTeNl8WCnRha_riQ">
+
+<script>
+const canvas=document.getElementById("void");
+const ctx=canvas.getContext("2d");
+
+let w,h;
+function resize(){
+    w=canvas.width=window.innerWidth;
+    h=canvas.height=window.innerHeight;
+}
+window.addEventListener("resize",resize);
+resize();
+
+/* =====================================================
+   WEBGL ACCELERATION LAYER (Hybrid Rendering)
+===================================================== */
+
+let gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
+
+let useWebGL = !!gl;
+
+if(useWebGL){
+    console.log("WebGL acceleration active");
+}else{
+    console.log("Falling back to 2D canvas");
+}
+
+/* =========================
+   MOUSE (original + intent)
+========================= */
+let mouse={
+    x:null,y:null,px:null,py:null,
+    speed:0,smoothness:0,
+    left:false,right:false,middle:false,
+    energy:0
+};
+
+let scrollUpStabilize = 0; // positive values slow rotation
+
+canvas.addEventListener("mousemove",e=>{
+    mouse.px=mouse.x;
+    mouse.py=mouse.y;
+    mouse.x=e.clientX;
+    mouse.y=e.clientY;
+    if(mouse.px){
+        const dx=mouse.x-mouse.px;
+        const dy=mouse.y-mouse.py;
+        const movement=Math.sqrt(dx*dx+dy*dy);
+        mouse.speed=movement;
+        mouse.smoothness=1/(1+movement);
+    }
+});
+
+canvas.addEventListener("mouseleave",()=>{mouse.x=null;mouse.y=null;});
+canvas.addEventListener("mousedown",e=>{
+    if(e.button===0) mouse.left=true;
+    if(e.button===1) mouse.middle=true;
+    if(e.button===2) mouse.right=true;
+});
+canvas.addEventListener("mouseup",e=>{
+    if(e.button===0) mouse.left=false;
+    if(e.button===1) mouse.middle=false;
+    if(e.button===2) mouse.right=false;
+});
+canvas.addEventListener("contextmenu",e=>e.preventDefault());
+
+// ----------------------------
+// DETECT LEFT + RIGHT CLICK
+// ----------------------------
+function checkResetTrigger(){
+    if(mouse.left && mouse.right && !resetState.active){
+        resetState.active = true;
+        resetState.alpha = 0;
+        resetState.fadingIn = false;
+    }
+}
+
+/* =====================================================
+   FIELD CONFIG
+===================================================== */
+const CONFIG={
+    layers:3,
+    count:210,
+    maxDistance:130,
+    influenceRadius:180,
+    baseDrift:0.08,
+    fieldPull:0.004,
+    entropy:0.996
+};
+
+class Node{
+    constructor(depth){
+        this.depth=depth;
+        this.z = Math.random()*200;
+        this.reset();
+    }
+
+    reset(){
+        this.x=Math.random()*w;
+        this.y=Math.random()*h;
+        this.vx=(Math.random()-0.5)*CONFIG.baseDrift*(1+this.depth*0.4);
+        this.vy=(Math.random()-0.5)*CONFIG.baseDrift*(1+this.depth*0.4);
+        this.density=0;
+    }
+    update(){
+        this.x+=this.vx;
+        this.y+=this.vy;
+        
+        if(mouse.middle){
+            this.z += mouse.speed * 0.5;
+        }
+
+        this.z *= 0.999;
+
+        if(this.x<0)this.x=w;
+        if(this.x>w)this.x=0;
+        if(this.y<0)this.y=h;
+        if(this.y>h)this.y=0;
+
+        if(mouse.x){
+            const dx=mouse.x-this.x;
+            const dy=mouse.y-this.y;
+            const dist=Math.sqrt(dx*dx+dy*dy);
+
+            if(mouse.left || mouse.right){
+                mouse.energy=Math.min(1,mouse.energy+0.015);
+            }else{
+                mouse.energy*=0.94;
+            }
+
+            const dynamicRadius=CONFIG.influenceRadius*(1+mouse.energy*0.8);
+
+            if(dist<dynamicRadius){
+                let baseForce=(1-dist/dynamicRadius)*CONFIG.fieldPull*(1+this.depth*0.5);
+                if(mouse.left){baseForce*=1+mouse.energy*2;}
+                if(mouse.right){baseForce*=-1*(1+mouse.energy*2);}
+                this.vx+=dx*baseForce;
+                this.vy+=dy*baseForce;
+                this.density+=0.02*(1+this.depth*0.5)*(1+mouse.energy*0.6);
+            }
+        }
+
+        this.vx*=CONFIG.entropy;
+        this.vy*=CONFIG.entropy;
+        this.density*=0.97;
+    }
+    draw(){
+        const perspective = 1 / (1 + this.z*0.002);
+        const radius = (1.2+this.density*3*(1+this.depth*0.5)) * perspective;
+        ctx.beginPath();
+        ctx.arc(this.x,this.y,radius,0,Math.PI*2);
+        ctx.fillStyle=`rgba(60,60,60,${0.35+this.density*0.5})`;
+        ctx.fill();
+    }
+}
+
+let nodes=[];
+for(let l=0;l<CONFIG.layers;l++){
+    for(let i=0;i<CONFIG.count/CONFIG.layers;i++){
+        nodes.push(new Node(l));
+    }
+}
+
+// ----------------------------
+// RESET / FADE STATE
+// ----------------------------
+let resetState = {
+    active: false,
+    alpha: 0,       // fade overlay alpha
+    fadingIn: false // true when fading back in
+};
+
+/* =============================
+   CRYSTALLIZATION LAYERS
+   QUANTUM RIGID BODY ENGINE ∞
+============================= */
+
+let crystals=[];
+const GRAVITY=0.28;
+const AIR_DRAG=0.999;
+const ROT_DRAG=0.995;
+
+function applyMouseForceToCrystal(c){
+    if(!mouse.x) return;
+
+    const dx = mouse.x - c.cx;
+    const dy = mouse.y - c.cy;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const radius = CONFIG.influenceRadius * (1 + mouse.energy * 0.8);
+
+    if(dist < radius){
+        let force = (1 - dist / radius) * 0.15;
+        if(mouse.left)  force *= 1.5;  // slower pull
+        if(mouse.right) force *= -2.5;
+
+        const nx = dx / (dist || 1);
+        const ny = dy / (dist || 1);
+
+        if(c.frozen && mouse.left){
+            c.frozen = false;
+        }
+
+        c.vx += nx * force;
+        c.vy += ny * force;
+
+        if(mouse.left){
+            c.vy -= GRAVITY * 0.2;  // reduce counter gravity
+        }
+
+        c.angularVel += force * 0.02;
+        
+        // Optional: cap velocity
+        c.vx = Math.max(Math.min(c.vx, 3), -3);
+        c.vy = Math.max(Math.min(c.vy, 3), -3);
+    }
+}
+
+/* =============================
+   IMPACT SOUND (RESONANCE)
+============================= */
+
+function crystalImpactSound(mass){
+    const osc=audioCtx.createOscillator();
+    const gain=audioCtx.createGain();
+
+    osc.type="sine";
+    osc.frequency.value=120+mass*6;
+
+    gain.gain.value=0.25;
+    osc.connect(gain);
+    gain.connect(master);
+
+    osc.start();
+
+    gain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        audioCtx.currentTime+1.2
+    );
+
+    osc.stop(audioCtx.currentTime+1.2);
+}
+
+/* =============================
+   RIGID CRYSTAL BODY
+============================= */
+
+class Crystal{
+
+    constructor(snapshot){
+
+        /* --- center --- */
+        let cx=0,cy=0;
+        snapshot.forEach(n=>{
+            cx+=n.x;
+            cy+=n.y;
+        });
+        cx/=snapshot.length;
+        cy/=snapshot.length;
+
+        this.cx=cx;
+        this.cy=cy;
+
+        /* relative geometry */
+        this.nodes=snapshot.map(n=>({
+            rx:n.x-cx,
+            ry:n.y-cy
+        }));
+
+        /* physics */
+        this.vx=(Math.random()-0.5)*2;
+        this.vy=0;
+
+        /* angular momentum from mouse motion */
+        this.angle=0;
+        this.angularVel=(mouse.speed||0)*0.002*(Math.random()<0.5?-1:1);
+
+        this.mass=this.nodes.length;
+        this.frozen=false;
+    }
+
+    /* world position of node */
+    worldNode(n){
+        const cos=Math.cos(this.angle);
+        const sin=Math.sin(this.angle);
+
+        return {
+            x:this.cx + n.rx*cos - n.ry*sin,
+            y:this.cy + n.rx*sin + n.ry*cos
+        };
+    }
+
+    /* collision vs another crystal */
+    collide(other){
+
+        for(let a of this.nodes){
+            const wa=this.worldNode(a);
+
+            for(let b of other.nodes){
+                const wb=other.worldNode(b);
+
+                const dx=wa.x-wb.x;
+                const dy=wa.y-wb.y;
+                const d=Math.sqrt(dx*dx+dy*dy);
+
+                if(d<3){
+
+                    const overlap=3-d;
+                    const nx=dx/(d||1);
+                    const ny=dy/(d||1);
+
+                    this.cx+=nx*overlap*0.5;
+                    this.cy+=ny*overlap*0.5;
+
+                    this.vy*=0.2;
+                    this.angularVel*=0.6;
+
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    update(){
+
+        /* --- Apply mouse force FIRST --- */
+        applyMouseForceToCrystal(this);
+
+        /* --- SCROLL-UP STABILIZATION (enhanced) --- */
+        if(mouse.left && scrollUpStabilize > 0){
+            // Stronger damping of rotation
+            this.angularVel *= (1 - scrollUpStabilize * 1.5);
+
+            // Also gradually damp linear motion
+            this.vx *= (1 - scrollUpStabilize);
+            this.vy *= (1 - scrollUpStabilize);
+
+            // Gently restore node offsets to their rest positions
+            for(let n of this.nodes){
+                n.rx *= (1 - scrollUpStabilize * 0.3);
+                n.ry *= (1 - scrollUpStabilize * 0.3);
+            }
+
+            // Decay scrollUpStabilize over time
+            scrollUpStabilize *= 0.95;
+        }
+
+        /* --- Skip movement for frozen crystals --- */
+        if(this.frozen) return;
+
+        /* --- Gravity --- */
+        if(!mouse.left){
+            this.vy += GRAVITY * (1 + this.mass * 0.002); // normal gravity
+        } else {
+            this.vy += GRAVITY * 0.2; // levitate when dragging
+        }        
+
+        /* integrate */
+        this.cx+=this.vx;
+        this.cy+=this.vy;
+
+        this.angle+=this.angularVel;
+
+        this.vx*=AIR_DRAG;
+        this.vy*=AIR_DRAG;
+        this.angularVel*=ROT_DRAG;
+
+        let grounded=false;
+
+        /* ground collision */
+        for(let n of this.nodes){
+            const w=this.worldNode(n);
+
+            if(w.y>h-2){
+                this.cy-=w.y-(h-2);
+                grounded=true;
+            }
+        }
+
+        /* crystal collisions */
+        for(let other of crystals){
+            if(other===this) continue;
+            if(other.frozen){
+                if(this.collide(other)){
+                    grounded=true;
+                }
+            }
+        }
+
+        /* settle */
+        const energy = Math.abs(this.vx) + Math.abs(this.vy) + Math.abs(this.angularVel);
+
+        if(grounded && energy < 0.35){
+            this.frozen = true;
+            this.vx = 0;
+            this.vy = 0;
+            this.angularVel = 0;
+            crystalImpactSound(this.mass);
+        }
+
+        /* fracture mechanic */
+        if(Math.abs(this.vy)>12 && this.mass>40){
+
+            const half=Math.floor(this.nodes.length/2);
+
+            const partA=this.nodes.slice(0,half).map(n=>{
+                const w=this.worldNode(n);
+                return {x:w.x,y:w.y};
+            });
+
+            const partB=this.nodes.slice(half).map(n=>{
+                const w=this.worldNode(n);
+                return {x:w.x,y:w.y};
+            });
+
+            crystals.push(new Crystal(partA));
+            crystals.push(new Crystal(partB));
+
+            this.frozen=true;
+        }
+    }
+
+    draw(){
+
+        const pts=this.nodes.map(n=>this.worldNode(n));
+
+        /* nodes */
+        for(let p of pts){
+            ctx.beginPath();
+            ctx.arc(p.x,p.y,2,0,Math.PI*2);
+            ctx.fillStyle="rgba(30,30,70,0.9)";
+            ctx.fill();
+        }
+
+        /* connections */
+        for(let i=0;i<pts.length;i++){
+            for(let j=i+1;j<pts.length;j++){
+                const dx=pts[i].x-pts[j].x;
+                const dy=pts[i].y-pts[j].y;
+                const d=Math.sqrt(dx*dx+dy*dy);
+
+                if(d<CONFIG.maxDistance*0.8){
+                    ctx.strokeStyle="rgba(60,60,120,0.25)";
+                    ctx.lineWidth=0.4;
+                    ctx.beginPath();
+                    ctx.moveTo(pts[i].x,pts[i].y);
+                    ctx.lineTo(pts[j].x,pts[j].y);
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+}
+
+/* =============================
+   MASS GRAVITY WELLS
+============================= */
+
+function applyCrystalGravity(){
+
+    nodes.forEach(n=>{
+
+        crystals.forEach(c=>{
+
+            if(!c.frozen) return;
+            if(c.mass<25) return;
+
+            const dx=c.cx-n.x;
+            const dy=c.cy-n.y;
+
+            const dist=Math.sqrt(dx*dx+dy*dy)+0.1;
+
+            const force=(c.mass*0.00003)/dist;
+
+            n.vx+=dx*force;
+            n.vy+=dy*force;
+        });
+    });
+}
+
+/* =====================================================
+   PHASE IV — COSMIC EVOLUTION ENGINE
+===================================================== */
+
+/* =============================
+   WORLD MEMORY (Entropy Field)
+============================= */
+
+let savedMemory = localStorage.getItem("harmonicWorldMemory");
+const worldMemory = savedMemory
+    ? new Float32Array(JSON.parse(savedMemory))
+    : new Float32Array(300);
+
+let memoryTime=0;
+
+function updateWorldMemory(){
+    memoryTime+=0.001;
+
+    crystals.forEach(c=>{
+        if(!c.frozen) return;
+
+        const index=Math.floor((c.cx/w)*worldMemory.length);
+        if(index>=0 && index<worldMemory.length){
+            worldMemory[index]+=0.002*c.mass;
+        }
+    });
+
+    /* slow geological decay (hours-scale) */
+    for(let i=0;i<worldMemory.length;i++){
+        worldMemory[i]*=0.999995;
+    }
+    
+    // persist lightly every ~5 seconds
+    if(Math.floor(memoryTime) % 5 === 0){
+        localStorage.setItem(
+            "harmonicWorldMemory",
+            JSON.stringify(Array.from(worldMemory))
+        );
+    }
+
+}
+
+/* =============================
+   TEMPERATURE FIELD
+============================= */
+
+function crystalTemperature(c){
+
+    let heat=Math.abs(c.vy)*0.4 + Math.abs(c.angularVel)*50;
+
+    const memIndex=Math.floor((c.cx/w)*worldMemory.length);
+    heat+=worldMemory[memIndex]*0.02;
+
+    return heat;
+}
+
+/* =============================
+   MELTING PHASE
+============================= */
+
+function applyMelting(){
+
+    for(let i=crystals.length-1;i>=0;i--){
+
+        const c=crystals[i];
+        if(!c.frozen) continue;
+
+        const temp=crystalTemperature(c);
+
+        /* melt threshold */
+        if(temp>6 && c.mass>15){
+
+            const released=Math.floor(c.nodes.length*0.15);
+
+            for(let k=0;k<released;k++){
+                const n=c.nodes[k];
+                const wnode=c.worldNode(n);
+
+                nodes.push(new Node(0));
+                const newNode=nodes[nodes.length-1];
+                newNode.x=wnode.x;
+                newNode.y=wnode.y;
+            }
+
+            c.nodes.splice(0,released);
+            c.mass=c.nodes.length;
+
+            if(c.mass<8){
+                crystals.splice(i,1);
+            }
+        }
+    }
+}
+
+/* =============================
+   CRYSTAL FUSION
+============================= */
+
+function tryCrystalFusion(){
+
+    for(let i=0;i<crystals.length;i++){
+        for(let j=i+1;j<crystals.length;j++){
+
+            const a=crystals[i];
+            const b=crystals[j];
+
+            if(!a.frozen || !b.frozen) continue;
+
+            const dx=a.cx-b.cx;
+            const dy=a.cy-b.cy;
+            const dist=Math.sqrt(dx*dx+dy*dy);
+
+            if(dist<40){
+
+                const merged=[];
+
+                a.nodes.forEach(n=>{
+                    const w=a.worldNode(n);
+                    merged.push({x:w.x,y:w.y});
+                });
+
+                b.nodes.forEach(n=>{
+                    const w=b.worldNode(n);
+                    merged.push({x:w.x,y:w.y});
+                });
+
+                crystals.splice(j,1);
+                crystals.splice(i,1);
+
+                crystals.push(new Crystal(merged));
+                return;
+            }
+        }
+    }
+}
+
+/* =============================
+   ORBITAL MECHANICS
+============================= */
+
+function applyOrbitalMechanics(){
+
+    nodes.forEach(n=>{
+
+        crystals.forEach(c=>{
+
+            if(!c.frozen || c.mass<35) return;
+
+            const dx=c.cx-n.x;
+            const dy=c.cy-n.y;
+
+            const dist=Math.sqrt(dx*dx+dy*dy)+0.01;
+
+            if(dist<260){
+
+                const gravity=(c.mass*0.00005)/dist;
+
+                /* tangential orbital force */
+                const tx=-dy/dist;
+                const ty=dx/dist;
+
+                n.vx+=tx*gravity*40;
+                n.vy+=ty*gravity*40;
+            }
+        });
+    });
+}
+
+/* =============================
+   LIVING LATTICE GROWTH
+============================= */
+
+function growLattice(){
+
+    crystals.forEach(c=>{
+
+        if(!c.frozen) return;
+        if(c.mass<20) return;
+
+        if(Math.random()<0.02){
+
+            const angle=Math.random()*Math.PI*2;
+            const radius=20+Math.random()*30;
+
+            const x=c.cx+Math.cos(angle)*radius;
+            const y=c.cy+Math.sin(angle)*radius;
+
+            nodes.forEach((n,idx)=>{
+
+                const dx=n.x-x;
+                const dy=n.y-y;
+                const d=Math.sqrt(dx*dx+dy*dy);
+
+                if(d<18){
+
+                    c.nodes.push({
+                        rx:n.x-c.cx,
+                        ry:n.y-c.cy
+                    });
+
+                    crystalsGrowthSound(c.mass);
+
+                    nodes.splice(idx,1);
+                }
+            });
+
+            c.mass=c.nodes.length;
+        }
+    });
+}
+
+/* =============================
+   GROWTH SOUND
+============================= */
+
+function crystalsGrowthSound(mass){
+
+    const osc=audioCtx.createOscillator();
+    const gain=audioCtx.createGain();
+
+    osc.type="triangle";
+    osc.frequency.value=200+mass*3;
+
+    gain.gain.value=0.12;
+
+    osc.connect(gain);
+    gain.connect(master);
+
+    osc.start();
+
+    gain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        audioCtx.currentTime+0.8
+    );
+
+    osc.stop(audioCtx.currentTime+0.8);
+}
+
+
+/* =====================================================
+   SPECTRAL / CONNECT / BLOOM
+===================================================== */
+let currentHue=0;
+
+/* =====================================================
+   GAME CONSCIOUSNESS ENGINE ∞
+   Hierarchical Evolution System
+===================================================== */
+
+let GAME = {
+    level: 1,
+    xp: 0,
+    coherence: 0,
+    polarityBalance: 0,
+    flowerProgress: 0,
+    lastLeft: 0,
+    lastRight: 0,
+    civilizationScore: 0   // ✅ add this line
+};
+
+/* =====================================================
+   PLAYER IDENTITY SYSTEM
+===================================================== */
+
+let PLAYER = {
+    name: localStorage.getItem("playerName") || null,
+    id: crypto.randomUUID()
+};
+
+setTimeout(()=>{
+    if(!PLAYER.name){
+        const input = prompt("Enter your harmonic name:");
+        if(input && input.trim().length > 0){
+            PLAYER.name = input.trim();
+            localStorage.setItem("playerName", PLAYER.name);
+        }else{
+            PLAYER.name = "Anonymous Harmonic";
+        }
+    }
+}, 500);
+
+/* =============================
+   COHERENCE MEASUREMENT
+============================= */
+
+function updateCoherence(){
+
+    // polarity tracking
+    if(mouse.left)  GAME.lastLeft += 0.01;
+    if(mouse.right) GAME.lastRight += 0.01;
+
+    const diff = Math.abs(GAME.lastLeft - GAME.lastRight);
+    GAME.polarityBalance = 1 / (1 + diff);
+
+    // harmonic node density clustering
+    let clusterScore = 0;
+    nodes.forEach(n=>{
+        if(n.density > 0.3) clusterScore += 0.001;
+    });
+
+    // frozen crystal harmony
+    let frozenMass = 0;
+    crystals.forEach(c=>{
+        if(c.frozen) frozenMass += c.mass;
+    });
+
+    GAME.coherence =
+        (clusterScore * 0.4) +
+        (GAME.polarityBalance * 0.3) +
+        (frozenMass * 0.0005);
+
+    GAME.xp += GAME.coherence * 0.1;
+
+    // level scaling (nonlinear Fibonacci-like curve)
+    const threshold = 100 * GAME.level * 1.618;
+
+    if(GAME.xp > threshold){
+        GAME.level++;
+        GAME.xp = 0;
+    }
+}
+
+function spectralColor(intensity){
+    const hue=(mouse.speed*2+intensity*240)%360;
+    currentHue=hue;
+    return `hsla(${hue},70%,60%,`;
+}
+
+function connect(){
+    for(let i=0;i<nodes.length;i++){
+        for(let j=i+1;j<Math.min(nodes.length, i+50);j++){
+            const dx=nodes[i].x-nodes[j].x;
+            const dy=nodes[i].y-nodes[j].y;
+            const dist=Math.sqrt(dx*dx+dy*dy);
+            if(dist<CONFIG.maxDistance){
+                const intensity=1-dist/CONFIG.maxDistance;
+                const densityBoost=(nodes[i].density+nodes[j].density)/2;
+                const opacity=intensity*0.15+densityBoost*0.5;
+                ctx.strokeStyle=spectralColor(densityBoost)+opacity+")";
+                ctx.lineWidth=0.5+densityBoost;
+                ctx.beginPath();
+                ctx.moveTo(nodes[i].x,nodes[i].y);
+                ctx.lineTo(nodes[j].x,nodes[j].y);
+                ctx.stroke();
+            }
+        }
+    }
+}
+
+function bloom(){
+    if(mouse.x){
+        const radius=CONFIG.influenceRadius*(1+mouse.energy*0.8);
+        const g=ctx.createRadialGradient(mouse.x,mouse.y,0,mouse.x,mouse.y,radius);
+        g.addColorStop(0,"rgba(255,255,255,0.15)");
+        g.addColorStop(1,"rgba(255,255,255,0)");
+        ctx.fillStyle=g;
+        ctx.fillRect(0,0,w,h);
+    }
+}
+
+/* =====================================================
+   FLOWER OF LIFE MANIFESTATION ENGINE
+===================================================== */
+
+function drawFlowerOfLife() {
+    if (GAME.level < 3) return;
+
+    const baseSpacing = 40;
+    const layers = Math.min(5, Math.floor(GAME.level / 2));
+    const centerX = w / 2;
+    const centerY = h / 2;
+
+    ctx.save();
+
+    ctx.globalAlpha = 0.1 + GAME.coherence * 0.4;
+
+    for (let q = -layers; q <= layers; q++) {
+        for (let r = -layers; r <= layers; r++) {
+
+            // Hex grid position
+            let x = centerX + baseSpacing * (Math.sqrt(3) * q + Math.sqrt(3)/2 * r);
+            let y = centerY + baseSpacing * (3/2 * r);
+
+            // Add harmonic oscillation for pseudo-4D effect
+            const time = performance.now() * 0.001;
+            x += Math.sin(q + r + time * 0.5) * 10 * (0.5 + GAME.coherence);
+            y += Math.cos(q - r + time * 0.5) * 10 * (0.5 + GAME.coherence);
+
+            // Dynamic radius per circle
+            const radius = baseSpacing * (0.6 + 0.4 * Math.sin(time + q + r));
+
+            // Color evolving with coherence & mouse speed
+            const hue = (q*15 + r*15 + time*30 + mouse.speed*2) % 360;
+            ctx.strokeStyle = `hsla(${hue},70%,60%,${0.3 + GAME.coherence*0.4})`;
+            ctx.lineWidth = 1 + GAME.coherence;
+
+            // Draw main circle
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI*2);
+            ctx.stroke();
+
+            // Optional nested circles for fractal layering
+            for(let i=1; i<=2; i++){
+                ctx.beginPath();
+                ctx.arc(x, y, radius*i*0.5, 0, Math.PI*2);
+                ctx.stroke();
+            }
+        }
+    }
+
+    ctx.restore();
+}
+
+/* =====================================================
+   AUDIO
+===================================================== */
+const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+let master=audioCtx.createGain();
+master.gain.value=0;
+master.connect(audioCtx.destination);
+
+let reverbDelay=audioCtx.createDelay();
+reverbDelay.delayTime.value=0.25;
+let feedback=audioCtx.createGain();
+feedback.gain.value=0.3;
+reverbDelay.connect(feedback);
+feedback.connect(reverbDelay);
+reverbDelay.connect(master);
+
+let voices=[];
+function createVoice(freq){
+    const osc=audioCtx.createOscillator();
+    const gain=audioCtx.createGain();
+    const pan=audioCtx.createStereoPanner();
+    const lfo=audioCtx.createOscillator();
+    const lfoGain=audioCtx.createGain();
+    osc.type="sine"; osc.frequency.value=freq;
+    lfo.type="sine"; lfo.frequency.value=0.1; lfoGain.gain.value=5;
+    lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+    gain.gain.value=0;
+    osc.connect(pan); pan.connect(gain); gain.connect(master); gain.connect(reverbDelay);
+    osc.start(); lfo.start();
+    return {osc,gain,pan};
+}
+for(let i=0;i<4;i++){voices.push(createVoice(220));}
+
+function hueToFreq(hue){return 174+(hue/360)*(963-174);}
+function updateAudio(){
+    if(!mouse.x){master.gain.linearRampToValueAtTime(0,audioCtx.currentTime+1);return;}
+    const base=hueToFreq(currentHue);
+    // Sacred ratio scaling
+    const phi = 1.618;
+    const harmonicBoost = 1 + (GAME.coherence * 0.5);
+    const evolvedBase = base * harmonicBoost;
+    const smooth=mouse.smoothness;
+    const chaotic=mouse.speed>12;
+    const chord = chaotic
+        ? [
+            evolvedBase,
+            evolvedBase * phi,
+            evolvedBase * (phi*phi),
+            evolvedBase * 2
+          ]
+        : [
+            evolvedBase,
+            evolvedBase * 1.25,
+            evolvedBase * phi,
+            evolvedBase * 2
+          ];
+
+    voices.forEach((v,i)=>{
+        v.osc.frequency.linearRampToValueAtTime(chord[i],audioCtx.currentTime+0.3);
+        const panValue=(mouse.x/w)*2-1;
+        v.pan.pan.linearRampToValueAtTime(panValue,audioCtx.currentTime+0.2);
+        v.gain.gain.linearRampToValueAtTime(0.15*smooth,audioCtx.currentTime+0.3);
+    });
+    master.gain.linearRampToValueAtTime(0.5*smooth,audioCtx.currentTime+0.5);
+}
+
+canvas.addEventListener("click",()=>{audioCtx.resume();});
+
+/* =====================================================
+   MIDDLE MOUSE SCROLL → DETACH + DROP
+===================================================== */
+canvas.addEventListener("wheel",e=>{
+
+    if(e.deltaY>0 && mouse.x){
+
+        const radius=CONFIG.influenceRadius*(1+mouse.energy*0.8);
+        const toCrystal=[];
+
+        for(let i=nodes.length-1;i>=0;i--){
+            const n=nodes[i];
+
+            const dx=n.x-mouse.x;
+            const dy=n.y-mouse.y;
+            const dist=Math.sqrt(dx*dx+dy*dy);
+
+            if(dist<radius && (mouse.left || mouse.right)){
+                toCrystal.push({x:n.x,y:n.y});
+                nodes.splice(i,1);
+            }
+        }
+
+        if(toCrystal.length>5){
+            crystals.push(new Crystal(toCrystal));
+        }
+        if(socket && socket.readyState === 1){
+            socket.send(JSON.stringify({
+                id: PLAYER.id,
+                name: PLAYER.name,
+                color: "#00ffff",
+                x: mouse.x,
+                y: mouse.y,
+                level: GAME.level,
+                coherence: GAME.coherence
+            }));
+        }       
+    }
+});
+
+// ----------------------------
+// SCROLL-UP → STABILIZE ROTATION
+// ----------------------------
+canvas.addEventListener("wheel", e => {
+    if (mouse.left && e.deltaY < 0) { // scroll upward while holding left click
+        scrollUpStabilize += -e.deltaY * 0.001; // accumulate stabilization factor
+        scrollUpStabilize = Math.min(scrollUpStabilize, 0.08); // stronger stabilization
+    }
+});
+
+/* =====================================================
+   RECURSIVE NODE RECYCLING ENGINE
+===================================================== */
+
+function recycleNodes(){
+
+    const maxNodes = 400;
+
+    if(nodes.length > maxNodes){
+
+        nodes.sort((a,b)=>a.density-b.density);
+
+        const removeCount = nodes.length - maxNodes;
+
+        nodes.splice(0, removeCount);
+
+        GAME.coherence = Math.min(1, GAME.coherence + 0.02);
+    }
+}
+
+/* =====================================================
+   MULTIPLAYER HARMONIC SYNCHRONIZATION
+===================================================== */
+
+let socket;
+let otherPlayers = {}; 
+
+function initMultiplayer(){
+
+    try{
+        socket = new WebSocket("wss://harmonic-civilization.onrender.com");
+
+        socket.onopen = () => {
+            setInterval(()=>{
+                if(socket.readyState===1){
+                    socket.send(JSON.stringify({
+                        level: GAME.level,
+                        coherence: GAME.coherence
+                    }));
+                }
+            },2000);
+        };
+
+        socket.onmessage = (msg)=>{
+            try{
+                const data = JSON.parse(msg.data);
+
+                // LEVEL / XP SYNC
+                if(data.level){
+                    GAME.xp += data.level * 0.5;
+                }
+
+                // CRYSTAL SYNC
+                if(data.type === "crystal" && data.nodes){
+                    crystals.push(new Crystal(data.nodes));
+                }
+                
+                if(data.id && data.id !== PLAYER.id){
+                    otherPlayers[data.id] = data;
+                }
+
+                // CIVILIZATION SCORE
+                if(data.civilizationScore){
+                    GAME.civilizationScore = data.civilizationScore;
+                }
+            }catch(e){}
+        };
+
+    }catch(e){}
+}
+
+initMultiplayer();
+
+/* =====================================================
+   WALLET CONNECT STUB
+===================================================== */
+
+let walletAddress = null;
+
+async function connectWallet(){
+    try{
+        if(window.ethereum){
+            const accounts = await window.ethereum.request({
+                method: 'eth_requestAccounts'
+            });
+
+            walletAddress = accounts[0];
+            console.log("Connected:", walletAddress);
+        }else{
+            console.log("No Ethereum provider found");
+        }
+    }catch(e){
+        console.log("Wallet connection rejected");
+    }
+}
+
+Object.values(otherPlayers).forEach(p => {
+    if(!p.x) return;
+
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.font="10px monospace";
+    ctx.fillText(p.name, p.x+10, p.y-10);
+});
+
+
+/* =====================================================
+   LOOP
+===================================================== */
+function animate(){
+    checkResetTrigger(); 
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,w,h);
+    applyFractalZoom();
+    updateCoherence();
+
+    /* --- nodes --- */
+    nodes.forEach(n=>{
+        n.update();
+        n.draw();
+    });
+
+    recycleNodes();   // <-- ADD THIS LINE
+
+    connect();
+    bloom();
+    updateAudio();
+
+    /* --- world forces --- */
+    applyCrystalGravity();
+    applyOrbitalMechanics();
+    updateWorldMemory();
+    applyMelting();
+    tryCrystalFusion();
+    detectGoldenAlignment();
+    growLattice();
+
+    /* --- crystals (ONLY ONCE) --- */
+    crystals.forEach(c=>{
+        c.update();
+        c.draw();
+    });
+
+    // ----------------------------
+    // FADE RESET LOGIC
+    // ----------------------------
+    if(resetState.active){
+        if(!resetState.fadingIn){
+            // fade out
+            resetState.alpha += 0.05; // adjust speed
+            if(resetState.alpha >= 1){
+                resetState.alpha = 1;
+                resetState.fadingIn = true;
+
+                // reset nodes and crystals
+                nodes = [];
+                for(let l=0;l<CONFIG.layers;l++){
+                    for(let i=0;i<CONFIG.count/CONFIG.layers;i++){
+                        nodes.push(new Node(l));
+                    }
+                }
+                crystals = [];
+            }
+        } else {
+            // fade back in
+            resetState.alpha -= 0.05;
+            if(resetState.alpha <= 0){
+                resetState.alpha = 0;
+                resetState.active = false;
+            }
+        }
+
+        // draw white overlay
+        ctx.fillStyle = `rgba(255,255,255,${resetState.alpha})`;
+        ctx.fillRect(0,0,w,h);
+    }
+    
+    // decay scroll stabilization over time
+    scrollUpStabilize *= 0.92;
+
+    drawFlowerOfLife();
+    drawGameHUD();
+    drawTronDashboard();
+    requestAnimationFrame(animate);
+}
+
+/* =====================================================
+   GAME HUD DISPLAY
+===================================================== */
+
+function drawGameHUD(){
+
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.font = "14px monospace";
+
+    ctx.fillText("PLAY THE GAME ∞ LEVEL UP",20,30);
+    ctx.fillText("Level: " + GAME.level,20,50);
+    ctx.fillText("XP: " + GAME.xp.toFixed(1),20,70);
+    ctx.fillText("Coherence: " + GAME.coherence.toFixed(3),20,90);
+    ctx.fillText("Player: " + PLAYER.name,20,110);
+
+    ctx.restore();
+}
+
+/* =====================================================
+   GOLDEN RATIO ORBITAL ALIGNMENT DETECTION
+===================================================== */
+
+function detectGoldenAlignment(){
+
+    const phi = 1.618;
+
+    for(let i=0;i<crystals.length;i++){
+        for(let j=i+1;j<crystals.length;j++){
+
+            const a=crystals[i];
+            const b=crystals[j];
+
+            if(!a.frozen || !b.frozen) continue;
+
+            const dx=a.cx-b.cx;
+            const dy=a.cy-b.cy;
+            const dist=Math.sqrt(dx*dx+dy*dy);
+
+            const ratio = dist / (Math.min(a.mass,b.mass)+1);
+
+            if(Math.abs(ratio - phi) < 0.05){
+                GAME.xp += 10;
+                GAME.coherence = Math.min(1, GAME.coherence + 0.05);
+            }
+        }
+    }
+}
+
+/* =====================================================
+   FRACTAL ZOOM (safe version)
+===================================================== */
+let fractalZoom = 1;
+
+function applyFractalZoom(){
+    if(mouse.right){
+        fractalZoom += 0.002;
+    }else{
+        fractalZoom *= 0.995;
+    }
+
+    fractalZoom = Math.max(1, Math.min(fractalZoom, 1.5));
+
+    ctx.translate(w/2, h/2);
+    ctx.scale(fractalZoom, fractalZoom);
+    ctx.translate(-w/2, -h/2);
+}
+
+/* =====================================================
+   TRON DASHBOARD
+===================================================== */
+function drawTronDashboard(){
+
+    ctx.save();
+    ctx.fillStyle = "#000000"; // black text
+    ctx.font = "12px monospace";
+
+    ctx.fillText("Harmonic Field Monitor", 30, h - 120);
+    ctx.fillText("Nodes: " + nodes.length, 30, h - 100);
+    ctx.fillText("Crystals: " + crystals.length, 30, h - 80);
+    ctx.fillText("World Memory: " + worldMemory.length, 30, h - 60);
+    ctx.fillText(
+        "Civilization: " + (GAME.civilizationScore || 0).toFixed(1),
+        30,
+        h - 40
+    );
+    if(walletAddress){
+        ctx.fillText("Wallet: " + walletAddress.slice(0,6) + "...", 30, h - 20);
+    }
+
+    ctx.restore();
+}
+
+animate();
+</script>
+
+</body>
+</html>
+
